@@ -109,8 +109,9 @@ export default function AdminBannerPage() {
       setCurrentImageUrl(finalImageUrl);
       setImageFile(null);
       setMessage({ text: "Banner guardado e publicado com sucesso!", type: "success" });
-    } catch (error: any) {
-      setMessage({ text: `Erro: ${error.message}`, type: "error" });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Ocorreu um erro desconhecido";
+      setMessage({ text: `Erro: ${errorMessage}`, type: "error" });
     } finally {
       setLoading(false);
     }
