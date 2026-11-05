@@ -7,7 +7,8 @@ import {
   LogOut,
   ShieldCheck,
   ArrowLeft,
-  Image as ImageIcon, // Ícone adicionado aqui!
+  Image as ImageIcon, 
+  ClipboardList, // Ícone para os pedidos adicionado aqui!
 } from "lucide-react";
 
 import { requireAdmin } from "@/lib/supabase/admin";
@@ -89,12 +90,17 @@ export default async function AdminPage() {
           Categorias
         </Link>
 
-        {/* --- NOVA LIGAÇÃO PARA O BANNER AQUI --- */}
+        {/* --- NOVA LIGAÇÃO PARA PEDIDOS AQUI --- */}
+        <Link href="/admin/pedidos" className="admin-nav-item">
+          <ClipboardList size={19} />
+          Pedidos
+        </Link>
+        {/* -------------------------------------- */}
+
         <Link href="/admin/banner" className="admin-nav-item">
           <ImageIcon size={19} />
           Banners
         </Link>
-        {/* --------------------------------------- */}
 
         <div className="admin-sidebar-bottom">
           <div className="admin-user">
