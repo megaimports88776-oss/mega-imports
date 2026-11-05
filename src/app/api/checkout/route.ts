@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     console.log("DADOS RECEBIDOS NO CHECKOUT:", JSON.stringify(body, null, 2));
 
-    const { customer, items } = body;
+    const { customer, items, paymentMethod, creditCard, creditCardHolderInfo } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "O carrinho está vazio." }, { status: 400 });
@@ -23,7 +23,6 @@ export async function POST(request: NextRequest) {
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      console.error("Faltam chaves do Supabase no .env.local");
       return NextResponse.json({ error: "Erro de configuração do servidor Supabase." }, { status: 500 });
     }
 
@@ -39,8 +38,7 @@ export async function POST(request: NextRequest) {
       .in("id", productIds);
 
     if (productsError || !dbProducts) {
-      console.error("Erro Supabase Products:", productsError);
-      return NextResponse.json({ error: "Erro ao consultar produtos no banco de dados." }, { status: 500 });
+      return NextResponse.json({ error: "Erro ao consultar produtos." }, { status: 500 });
     }
 
     let serverTotal = 0;
@@ -49,7 +47,7 @@ export async function POST(request: NextRequest) {
     for (const cartItem of items) {
       const dbProduct = dbProducts.find((p) => p.id === cartItem.id);
       if (!dbProduct || !dbProduct.is_active) {
-        return NextResponse.json({ error: "Produto indisponível no catálogo." }, { status: 400 });
+        return NextResponse.json({ error: "Produto indisponível." }, { status: 400 });
       }
 
       const qty = Math.max(1, Math.floor(Number(cartItem.quantity)));
@@ -66,10 +64,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const dueDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const dueDate = new Date().toISOString().split("T")[0]; // Para cartão, o vencimento é hoje
 
-    // Tentar criar cliente no Asaas
-    console.log("Enviando cliente para o Asaas...");
+    // 1. Criar/Atualizar cliente no Asaas
     const asaasCustomer = await asaasRequest<{ id: string }>("/customers", {
       method: "POST",
       body: JSON.stringify({
@@ -83,9 +80,8 @@ export async function POST(request: NextRequest) {
         province: customer.neighborhood?.trim() || "Geral",
       }),
     });
-    console.log("Cliente criado no Asaas com ID:", asaasCustomer.id);
 
-    // Criar pedido no Supabase
+    // 2. Criar pedido na base de dados (Supabase)
     const { data: createdOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -107,54 +103,95 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (orderError || !createdOrder) {
-      console.error("Erro Supabase Orders Insert:", orderError);
-      return NextResponse.json({ error: `Erro ao salvar pedido no Supabase: ${orderError?.message}` }, { status: 500 });
+      return NextResponse.json({ error: "Erro ao salvar pedido." }, { status: 500 });
     }
 
     await supabase.from("order_items").insert(
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    // Criar cobrança Pix no Asaas
-    console.log("Criando cobrança Pix no Asaas...");
-    const asaasPayment = await asaasRequest<{ id: string }>("/payments", {
-      method: "POST",
-      body: JSON.stringify({
-        customer: asaasCustomer.id,
-        billingType: "PIX",
-        value: serverTotal,
-        dueDate,
-        description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
-        externalReference: createdOrder.id,
-      }),
-    });
-    console.log("Cobrança criada com ID:", asaasPayment.id);
+    // 3. Processar Pagamento no Asaas (Pix ou Cartão)
+    let paymentResponse: any = {};
+    const asaasPaymentType = paymentMethod === "CREDIT_CARD" ? "CREDIT_CARD" : "PIX";
+
+    const paymentPayload: any = {
+      customer: asaasCustomer.id,
+      billingType: asaasPaymentType,
+      value: serverTotal,
+      dueDate,
+      description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
+      externalReference: createdOrder.id,
+    };
+
+    if (asaasPaymentType === "CREDIT_CARD") {
+      // Adicionar dados do cartão para cobrança direta
+      paymentPayload.creditCard = {
+        holderName: creditCard.holderName,
+        number: creditCard.number.replace(/\D/g, ""),
+        expiryMonth: creditCard.expiryMonth,
+        expiryYear: creditCard.expiryYear,
+        ccv: creditCard.ccv
+      };
+      paymentPayload.creditCardHolderInfo = {
+        name: customer.name.trim(),
+        email: customer.email.trim(),
+        cpfCnpj: cleanCpfCnpj,
+        postalCode: cleanCep,
+        addressNumber: customer.number?.trim() || "S/N",
+        addressComplement: null,
+        phone: cleanPhone,
+        mobilePhone: cleanPhone
+      };
+      
+      const asaasPayment = await asaasRequest<any>("/payments", {
+        method: "POST",
+        body: JSON.stringify(paymentPayload),
+      });
+
+      paymentResponse = {
+        orderId: createdOrder.id,
+        paymentId: asaasPayment.id,
+        total: serverTotal,
+        status: asaasPayment.status, // PODE SER CONFIRMED OU PENDING
+        method: "CREDIT_CARD"
+      };
+
+    } else {
+      // É PIX, geramos o QR Code
+      const asaasPayment = await asaasRequest<{ id: string }>("/payments", {
+        method: "POST",
+        body: JSON.stringify(paymentPayload),
+      });
+
+      const pixQrCode = await asaasRequest<{
+        encodedImage: string;
+        payload: string;
+        expirationDate: string;
+      }>(`/payments/${asaasPayment.id}/pixQrCode`, {
+        method: "GET",
+      });
+
+      paymentResponse = {
+        orderId: createdOrder.id,
+        paymentId: asaasPayment.id,
+        total: serverTotal,
+        qrCodeBase64: pixQrCode.encodedImage,
+        pixCopyPaste: pixQrCode.payload,
+        expirationDate: pixQrCode.expirationDate,
+        method: "PIX"
+      };
+    }
 
     await supabase
       .from("orders")
-      .update({ asaas_payment_id: asaasPayment.id })
+      .update({ asaas_payment_id: paymentResponse.paymentId })
       .eq("id", createdOrder.id);
 
-    // Buscar QR Code Pix
-    const pixQrCode = await asaasRequest<{
-      encodedImage: string;
-      payload: string;
-      expirationDate: string;
-    }>(`/payments/${asaasPayment.id}/pixQrCode`, {
-      method: "GET",
-    });
-
-    return NextResponse.json({
-      orderId: createdOrder.id,
-      paymentId: asaasPayment.id,
-      total: serverTotal,
-      qrCodeBase64: pixQrCode.encodedImage,
-      pixCopyPaste: pixQrCode.payload,
-      expirationDate: pixQrCode.expirationDate,
-    });
+    return NextResponse.json(paymentResponse);
+    
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
-    console.error("ERRO CAPTURADO NO CATCH DO CHECKOUT:", err);
+    console.error("ERRO:", err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
