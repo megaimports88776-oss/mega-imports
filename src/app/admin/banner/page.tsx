@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   LayoutDashboard, Package, ShoppingBag, LogOut, ShieldCheck, ArrowLeft,
-  Image as ImageIcon, Upload, Link as LinkIcon, Type, AlignLeft, CheckCircle2, AlertCircle, Trash2
+  Image as ImageIcon, Upload, Link as LinkIcon, CheckCircle2, AlertCircle, Trash2
 } from "lucide-react";
 
 export default function AdminBannerPage() {
@@ -18,8 +18,6 @@ export default function AdminBannerPage() {
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activeBannerId, setActiveBannerId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [subtitle, setSubtitle] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null);
@@ -32,7 +30,7 @@ export default function AdminBannerPage() {
     });
 
     async function fetchActiveBanner() {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("promotional_banners")
         .select("*")
         .eq("is_active", true)
@@ -42,8 +40,6 @@ export default function AdminBannerPage() {
 
       if (data) {
         setActiveBannerId(data.id);
-        setTitle(data.title);
-        setSubtitle(data.subtitle || "");
         setLinkUrl(data.link_url || "");
         setCurrentImageUrl(data.image_url);
       }
@@ -66,7 +62,7 @@ export default function AdminBannerPage() {
       await supabase.from("promotional_banners").update({ is_active: false }).eq("id", activeBannerId);
       setMessage({ text: "Banner removido da loja com sucesso!", type: "success" });
       setActiveBannerId(null);
-      setTitle(""); setSubtitle(""); setLinkUrl(""); setCurrentImageUrl(null); setImageFile(null);
+      setLinkUrl(""); setCurrentImageUrl(null); setImageFile(null);
     } catch (error) {
       setMessage({ text: "Erro ao remover banner.", type: "error" });
     } finally {
@@ -100,7 +96,8 @@ export default function AdminBannerPage() {
       await supabase.from("promotional_banners").update({ is_active: false }).neq("id", "00000000-0000-0000-0000-000000000000");
 
       const { data: newBanner, error: insertError } = await supabase.from("promotional_banners").insert({
-        title, subtitle, link_url: linkUrl, image_url: finalImageUrl, is_active: true
+        title: "Banner Destaque", // Valor padrão já que tirámos o input
+        link_url: linkUrl, image_url: finalImageUrl, is_active: true
       }).select().single();
 
       if (insertError) throw new Error(insertError.message);
@@ -144,7 +141,7 @@ export default function AdminBannerPage() {
 
         <div className="admin-content-card" style={{ marginTop: '24px', position: 'relative' }}>
           <style dangerouslySetInnerHTML={{ __html: `
-            .custom-banner-form { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 30px; }
+            .custom-banner-form { display: grid; grid-template-columns: 1fr; gap: 24px; margin-top: 30px; max-width: 800px;}
             .form-col { display: flex; flex-direction: column; gap: 24px; }
             .form-group { display: flex; flex-direction: column; gap: 10px; }
             .form-label { font-size: 13px; font-weight: 600; color: #a1a1aa; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px; }
@@ -157,10 +154,8 @@ export default function AdminBannerPage() {
             .dropzone:hover { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.03); }
             .dropzone-input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 10; }
             .dropzone-content { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 20px; text-align: center; z-index: 2; }
-            .dropzone-bg { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0.4; z-index: 1; filter: blur(2px); transition: opacity 0.3s; }
-            .dropzone:hover .dropzone-bg { opacity: 0.2; }
-            .dropzone-icon-bg { width: 60px; height: 60px; background: rgba(255, 255, 255, 0.05); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; backdrop-filter: blur(4px); transition: all 0.2s; }
-            .dropzone-title { color: #fff; font-weight: 600; font-size: 14px; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+            .dropzone-bg { position: absolute; inset: 0; background-size: cover; background-position: center; z-index: 1; }
+            .dropzone-title { color: #fff; background: rgba(0,0,0,0.7); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; }
             .btn-submit { background: #8b5cf6; color: #fff; border: none; border-radius: 12px; padding: 16px 24px; font-size: 15px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.2s ease; flex: 1; }
             .btn-submit:hover:not(:disabled) { background: #7c3aed; box-shadow: 0 4px 20px rgba(139, 92, 246, 0.3); transform: translateY(-2px); }
             .btn-delete { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 16px 24px; font-size: 15px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.2s ease; }
@@ -169,13 +164,12 @@ export default function AdminBannerPage() {
             .alert-box { padding: 16px; border-radius: 12px; display: flex; align-items: center; gap: 12px; margin-bottom: 24px; font-size: 14px; font-weight: 500; }
             .alert-success { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: #34d399; }
             .alert-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171; }
-            @media (max-width: 1024px) { .custom-banner-form { grid-template-columns: 1fr; gap: 24px; } }
           `}} />
 
           <div style={{ paddingBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <h2 style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff', margin: '0 0 8px 0' }}>{activeBannerId ? "Editar Banner Atual" : "Criar Novo Banner"}</h2>
-              <p style={{ color: '#a1a1aa', fontSize: '14px', margin: 0 }}>Gerencie o destaque principal da loja.</p>
+              <p style={{ color: '#a1a1aa', fontSize: '14px', margin: 0 }}>Envie a imagem pronta do seu banner de destaque.</p>
             </div>
             {activeBannerId && (
               <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 'bold', border: '1px solid rgba(16,185,129,0.3)' }}>
@@ -192,29 +186,29 @@ export default function AdminBannerPage() {
           )}
 
           <form onSubmit={handleSubmit} className="custom-banner-form">
-            <div className="form-col">
-              <div className="form-group"><label className="form-label">Título em Destaque</label><div className="input-wrapper"><Type size={18} className="input-icon" /><input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Deixe em branco para usar só a imagem" className="custom-input" /></div></div>
-              <div className="form-group"><label className="form-label">Subtítulo (Descrição)</label><div className="input-wrapper"><AlignLeft size={18} className="input-icon" /><input type="text" value={subtitle} onChange={e => setSubtitle(e.target.value)} placeholder="Opcional" className="custom-input" /></div></div>
-              <div className="form-group"><label className="form-label">Link de destino (Opcional)</label><div className="input-wrapper"><LinkIcon size={18} className="input-icon" /><input type="text" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} placeholder="Ex: /categoria/perifericos" className="custom-input" /></div></div>
-            </div>
-
-            <div className="form-col" style={{ height: '100%' }}>
-              <div className="form-group" style={{ height: '100%' }}>
-                <label className="form-label">Imagem de Fundo (1200x400) <span>*</span></label>
-                <div className="dropzone">
-                  <input type="file" accept="image/*" onChange={e => setImageFile(e.target.files?.[0] || null)} className="dropzone-input" />
-                  {(currentImageUrl && !imageFile) && <div className="dropzone-bg" style={{ backgroundImage: `url(${currentImageUrl})` }} />}
-                  <div className="dropzone-content">
-                    <div className="dropzone-icon-bg"><ImageIcon size={28} /></div>
-                    <span className="dropzone-title">
-                      {imageFile ? imageFile.name : currentImageUrl ? "Imagem atual carregada. Clique para trocar." : "Clique para escolher a imagem"}
-                    </span>
-                  </div>
+            <div className="form-group">
+              <label className="form-label">Imagem do Banner <span>*</span></label>
+              <div className="dropzone">
+                <input type="file" accept="image/*" onChange={e => setImageFile(e.target.files?.[0] || null)} className="dropzone-input" />
+                {(currentImageUrl && !imageFile) && <div className="dropzone-bg" style={{ backgroundImage: `url(${currentImageUrl})` }} />}
+                <div className="dropzone-content">
+                  {(!currentImageUrl || imageFile) && <div style={{width: 60, height: 60, background: 'rgba(255,255,255,0.05)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff'}}><ImageIcon size={28} /></div>}
+                  <span className="dropzone-title">
+                    {imageFile ? imageFile.name : currentImageUrl ? "Clique aqui para trocar a imagem atual" : "Clique para escolher a imagem (ex: 1200x400)"}
+                  </span>
                 </div>
               </div>
             </div>
 
-            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '16px', marginTop: '10px' }}>
+            <div className="form-group">
+              <label className="form-label">Link de destino (Opcional)</label>
+              <div className="input-wrapper">
+                <LinkIcon size={18} className="input-icon" />
+                <input type="text" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} placeholder="Ex: /categoria/perifericos" className="custom-input" />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '16px', marginTop: '10px' }}>
               {activeBannerId && (
                 <button type="button" onClick={handleDelete} disabled={deleting || loading} className="btn-delete">
                   <Trash2 size={20} /> {deleting ? "A remover..." : "Remover Banner"}
