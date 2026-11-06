@@ -3,7 +3,7 @@
 import { useState, FormEvent } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, Check, Copy, Lock, QrCode, ShieldCheck, ShoppingBag, Zap, CreditCard, Smartphone
+  ArrowLeft, Check, Copy, Lock, ShieldCheck, ShoppingBag, Zap, Smartphone, MessageCircle
 } from "lucide-react";
 import { useCart } from "@/contexts/CartContext";
 
@@ -13,6 +13,14 @@ function formatBRL(value: number) {
 
 export default function CheckoutPage() {
   const { cart, cartTotal, clearCart } = useCart();
+
+  // ==========================================
+  // CONFIGURAÇÕES DO PIX E WHATSAPP DO DONO
+  // ==========================================
+  const WHATSAPP_NUMERO = "5511999999999"; // Coloque o DDI + DDD + Número (apenas números)
+  const CHAVE_PIX = "email-do-dono@gmail.com"; 
+  const NOME_RECEBEDOR = "Nome do Dono da Loja";
+  // ==========================================
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -26,17 +34,9 @@ export default function CheckoutPage() {
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
 
-  const [paymentMethod, setPaymentMethod] = useState<"PIX" | "CREDIT_CARD">("PIX");
-  const [installments, setInstallments] = useState(1);
-  
-  const [ccName, setCcName] = useState("");
-  const [ccNumber, setCcNumber] = useState("");
-  const [ccExpiry, setCcExpiry] = useState(""); 
-  const [ccCvv, setCcCvv] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [paymentResult, setPaymentResult] = useState<any | null>(null);
+  const [orderResult, setOrderResult] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
 
   const handleCepBlur = async () => {
@@ -60,51 +60,37 @@ export default function CheckoutPage() {
     setLoading(true);
 
     try {
-      let creditCardData = null;
-
-      if (paymentMethod === "CREDIT_CARD") {
-        const [month, year] = ccExpiry.split("/");
-        if (!month || !year || year.length !== 4) {
-          throw new Error("A validade do cartão deve estar no formato MM/AAAA (ex: 12/2029)");
-        }
-        creditCardData = {
-          holderName: ccName,
-          number: ccNumber,
-          expiryMonth: month,
-          expiryYear: year,
-          ccv: ccCvv
-        };
-      }
-
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          paymentMethod,
-          installmentCount: installments,
           customer: { name, email, cpfCnpj, phone, cep, address, number, complement, neighborhood, city, state },
           items: cart.map((item) => ({ id: item.id, quantity: item.quantity })),
-          creditCard: creditCardData
         }),
       });
 
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erro ao processar o checkout.");
 
-      setPaymentResult(data);
+      setOrderResult(data);
       clearCart();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Erro ao gerar pagamento.");
+      setError(err instanceof Error ? err.message : "Erro ao gerar pedido.");
     } finally {
       setLoading(false);
     }
   };
 
   const handleCopyPix = async () => {
-    if (!paymentResult?.pixCopyPaste) return;
-    await navigator.clipboard.writeText(paymentResult.pixCopyPaste);
+    await navigator.clipboard.writeText(CHAVE_PIX);
     setCopied(true);
     setTimeout(() => setCopied(false), 3000);
+  };
+
+  const openWhatsApp = () => {
+    const idCurto = orderResult.orderId.slice(0, 8);
+    const mensagem = `Olá! Acabei de fazer um pedido na loja.%0A%0A*Nº do Pedido:* #${idCurto}%0A*Nome:* ${name}%0A*Valor:* ${formatBRL(orderResult.total)}%0A%0ASegue o meu comprovante de pagamento Pix abaixo:`;
+    window.open(`https://wa.me/${WHATSAPP_NUMERO}?text=${mensagem}`, "_blank");
   };
 
   return (
@@ -120,18 +106,18 @@ export default function CheckoutPage() {
         @media (max-width: 600px) { .ck-row { grid-template-columns: 1fr; } }
         .ck-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
         .ck-field label { font-size: 13px; color: #a1a1aa; font-weight: 500; }
-        .ck-field input, .ck-field select { background: #09090f; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 14px; outline: none; transition: border 0.2s; width: 100%; }
-        .ck-field input:focus, .ck-field select:focus { border-color: #8b5cf6; }
+        .ck-field input { background: #09090f; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 14px; outline: none; transition: border 0.2s; width: 100%; }
+        .ck-field input:focus { border-color: #8b5cf6; }
         .ck-error { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35); color: #fca5a5; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; font-size: 14px; }
         .ck-submit { width: 100%; padding: 16px; border-radius: 12px; border: none; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: opacity 0.2s;}
         .ck-submit:hover { opacity: 0.9; }
         .ck-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .wpp-btn { background: #25D366; color: white; border: none; border-radius: 12px; padding: 16px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; transition: background 0.2s; margin-top: 16px; }
+        .wpp-btn:hover { background: #128C7E; }
+
         .ck-summary-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; }
         .ck-pix-box { max-width: 540px; margin: 20px auto; text-align: center; background: #101018; border: 1px solid rgba(139,92,246,0.35); border-radius: 18px; padding: 36px 28px; }
-        
-        .method-tabs { display: flex; gap: 16px; margin-bottom: 24px; }
-        .method-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.08); background: #09090f; color: #a1a1aa; cursor: pointer; font-weight: 600; transition: all 0.2s; }
-        .method-btn.active { border-color: #8b5cf6; background: rgba(139,92,246,0.1); color: #fff; }
       `}</style>
 
       <div className="ck-wrap">
@@ -145,29 +131,37 @@ export default function CheckoutPage() {
           </Link>
         </header>
 
-        {paymentResult ? (
+        {orderResult ? (
           <div className="ck-pix-box">
-            {paymentResult.method === "PIX" ? (
-              <>
-                <QrCode size={42} color="#a78bfa" style={{ margin: "0 auto 12px" }} />
-                <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pedido Gerado!</h1>
-                <p style={{ color: "#a1a1aa", fontSize: 14, margin: "0 0 16px" }}>Escaneie o QR Code abaixo no aplicativo do seu banco.</p>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#a78bfa" }}>{formatBRL(paymentResult.total)}</div>
-                <img src={`data:image/png;base64,${paymentResult.qrCodeBase64}`} alt="QR Code Pix" style={{ width: 240, height: 240, margin: "20px auto", background: "#fff", padding: 12, borderRadius: 14, display: "block" }} />
-                <div style={{ width: "100%", background: "#09090f", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 12, color: "#d4d4d8", fontSize: 12, marginBottom: 14, wordBreak: "break-all" }}>{paymentResult.pixCopyPaste}</div>
-                <button type="button" onClick={handleCopyPix} className="ck-submit">
-                  {copied ? <>Copiado! <Check size={18} /></> : <>Copiar Código Pix <Copy size={18} /></>}
-                </button>
-              </>
-            ) : (
-              <>
-                <Check size={52} color="#10b981" style={{ margin: "0 auto 16px" }} />
-                <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pagamento Aprovado!</h1>
-                <p style={{ color: "#a1a1aa", fontSize: 15, margin: "0 0 24px" }}>O seu pagamento por cartão foi processado com sucesso.</p>
-                <Link href="/" className="ck-submit" style={{ textDecoration: "none" }}>Voltar à Loja</Link>
-              </>
-            )}
-            <p style={{ color: "#71717a", fontSize: 12, marginTop: 20 }}>Pedido: #{paymentResult.orderId.slice(0, 8)}</p>
+            <Check size={52} color="#10b981" style={{ margin: "0 auto 12px" }} />
+            <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pedido Reservado!</h1>
+            <p style={{ color: "#a1a1aa", fontSize: 14, margin: "0 0 16px" }}>Para confirmar sua compra, realize o pagamento via Pix.</p>
+            
+            <div style={{ fontSize: 28, fontWeight: 900, color: "#a78bfa", marginBottom: 24 }}>
+              {formatBRL(orderResult.total)}
+            </div>
+
+            <div style={{ background: "#09090f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 20, marginBottom: 24, textAlign: "left" }}>
+              <p style={{ margin: "0 0 8px", color: "#a1a1aa", fontSize: 14 }}>Chave Pix (E-mail/CPF/CNPJ/Telefone):</p>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 4 }}>{CHAVE_PIX}</div>
+              <div style={{ fontSize: 14, color: "#71717a" }}>Nome: {NOME_RECEBEDOR}</div>
+            </div>
+
+            <button type="button" onClick={handleCopyPix} className="ck-submit" style={{ background: "#3f3f46", color: "#fff" }}>
+              {copied ? <>Chave Copiada! <Check size={18} /></> : <>Copiar Chave Pix <Copy size={18} /></>}
+            </button>
+
+            <div style={{ margin: "24px 0", height: 1, background: "rgba(255,255,255,0.08)" }} />
+
+            <h3 style={{ fontSize: 16, marginBottom: 12 }}>Já fez o pagamento?</h3>
+            <p style={{ color: "#a1a1aa", fontSize: 14, marginBottom: 16 }}>Envie o comprovante no nosso WhatsApp para liberarmos o envio imediatamente.</p>
+            
+            <button type="button" onClick={openWhatsApp} className="wpp-btn">
+              <MessageCircle size={22} />
+              Enviar Comprovante
+            </button>
+            
+            <p style={{ color: "#71717a", fontSize: 12, marginTop: 24 }}>Pedido: #{orderResult.orderId.slice(0, 8)}</p>
           </div>
         ) : cart.length === 0 ? (
           <div className="ck-pix-box">
@@ -214,68 +208,17 @@ export default function CheckoutPage() {
 
               <div className="ck-card">
                 <h2><ShieldCheck size={18} color="#a78bfa" /> Forma de Pagamento</h2>
-                
-                <div className="method-tabs">
-                  <button type="button" className={`method-btn ${paymentMethod === "PIX" ? "active" : ""}`} onClick={() => setPaymentMethod("PIX")}>
-                    <Smartphone size={18} /> Pix
-                  </button>
-                  <button type="button" className={`method-btn ${paymentMethod === "CREDIT_CARD" ? "active" : ""}`} onClick={() => setPaymentMethod("CREDIT_CARD")}>
-                    <CreditCard size={18} /> Cartão
-                  </button>
-                </div>
-
-                {paymentMethod === "CREDIT_CARD" && (
-                  <div style={{ background: "#0c0c14", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div className="ck-field">
-                      <label>Nome impresso no Cartão *</label>
-                      <input type="text" required={paymentMethod === "CREDIT_CARD"} value={ccName} onChange={(e) => setCcName(e.target.value.toUpperCase())} placeholder="NOME COMPLETO" />
-                    </div>
-                    <div className="ck-field">
-                      <label>Número do Cartão *</label>
-                      <input type="text" required={paymentMethod === "CREDIT_CARD"} value={ccNumber} onChange={(e) => setCcNumber(e.target.value)} placeholder="0000 0000 0000 0000" maxLength={19} />
-                    </div>
-                    <div className="ck-row">
-                      <div className="ck-field">
-                        <label>Validade (MM/AAAA) *</label>
-                        <input type="text" required={paymentMethod === "CREDIT_CARD"} value={ccExpiry} onChange={(e) => setCcExpiry(e.target.value)} placeholder="12/2029" maxLength={7} />
-                      </div>
-                      <div className="ck-field">
-                        <label>CVV (Código de segurança) *</label>
-                        <input type="text" required={paymentMethod === "CREDIT_CARD"} value={ccCvv} onChange={(e) => setCcCvv(e.target.value)} placeholder="123" maxLength={4} />
-                      </div>
-                    </div>
-                    
-                    {/* NOVO CAMPO: PARCELAMENTO */}
-                    <div className="ck-field" style={{ marginTop: 16 }}>
-                      <label>Parcelamento *</label>
-                      <select 
-                        value={installments} 
-                        onChange={(e) => setInstallments(Number(e.target.value))}
-                        required={paymentMethod === "CREDIT_CARD"}
-                      >
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => {
-                          const val = cartTotal / num;
-                          // Asaas exige que a parcela mínima seja de pelo menos R$ 5,00
-                          if (num > 1 && val < 5) return null;
-                          return (
-                            <option key={num} value={num}>
-                              {num}x de {formatBRL(val)} {num === 1 ? "à vista" : "sem juros"}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-
+                <div style={{ background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                  <Smartphone size={24} color="#a78bfa" />
+                  <div>
+                    <strong style={{ display: "block", color: "#fff" }}>Pagamento Direto via Pix</strong>
+                    <span style={{ fontSize: 13, color: "#a1a1aa" }}>Sem taxas adicionais. Chave exibida na próxima tela.</span>
                   </div>
-                )}
-
-                {paymentMethod === "PIX" && (
-                  <p style={{ color: "#a1a1aa", fontSize: 14 }}>O QR Code será gerado na próxima tela. O pagamento via Pix é aprovado instantaneamente.</p>
-                )}
+                </div>
               </div>
 
               <button type="submit" className="ck-submit" disabled={loading}>
-                {loading ? "Processando Segurança..." : paymentMethod === "PIX" ? `Gerar Pix de ${formatBRL(cartTotal)}` : `Pagar ${formatBRL(cartTotal)} no Cartão`}
+                {loading ? "Processando..." : `Finalizar Pedido de ${formatBRL(cartTotal)}`}
               </button>
             </form>
 

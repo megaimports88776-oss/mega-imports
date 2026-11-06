@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { asaasRequest } from "@/lib/asaas/client";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { customer, items, paymentMethod, creditCard, installmentCount } = body;
+    const { customer, items } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "O carrinho está vazio." }, { status: 400 });
@@ -20,7 +19,6 @@ export async function POST(request: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    // Se a chave não existir na Vercel, o erro que viu na tela é disparado aqui
     if (!supabaseUrl || !supabaseServiceKey) {
       return NextResponse.json({ error: "Erro de configuração do servidor Supabase." }, { status: 500 });
     }
@@ -29,6 +27,7 @@ export async function POST(request: NextRequest) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
+    // Validar produtos
     const productIds = items.map((i: { id: string }) => i.id);
     const { data: dbProducts, error: productsError } = await supabase
       .from("products")
@@ -62,22 +61,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const dueDate = new Date().toISOString().split("T")[0];
-
-    const asaasCustomer = await asaasRequest<{ id: string }>("/customers", {
-      method: "POST",
-      body: JSON.stringify({
-        name: customer.name.trim(),
-        email: customer.email.trim(),
-        cpfCnpj: cleanCpfCnpj,
-        mobilePhone: cleanPhone,
-        postalCode: cleanCep,
-        address: customer.address?.trim() || "Não informado",
-        addressNumber: customer.number?.trim() || "S/N",
-        province: customer.neighborhood?.trim() || "Geral",
-      }),
-    });
-
+    // Criar o pedido apenas no banco de dados com status PENDING
     const { data: createdOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -92,8 +76,7 @@ export async function POST(request: NextRequest) {
         shipping_city: customer.city?.trim() || "",
         shipping_state: customer.state?.trim() || "",
         total_amount: serverTotal,
-        status: "PENDING",
-        asaas_customer_id: asaasCustomer.id,
+        status: "PENDING"
       })
       .select("id")
       .single();
@@ -106,103 +89,11 @@ export async function POST(request: NextRequest) {
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    let paymentResponse: any = {};
-    const asaasPaymentType = paymentMethod === "CREDIT_CARD" ? "CREDIT_CARD" : "PIX";
-    const installments = Number(installmentCount) || 1;
-
-    if (asaasPaymentType === "CREDIT_CARD") {
-      const paymentPayload: any = {
-        customer: asaasCustomer.id,
-        billingType: "CREDIT_CARD",
-        dueDate,
-        description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
-        externalReference: createdOrder.id,
-        creditCard: {
-          holderName: creditCard.holderName,
-          number: creditCard.number.replace(/\D/g, ""),
-          expiryMonth: creditCard.expiryMonth,
-          expiryYear: creditCard.expiryYear,
-          ccv: creditCard.ccv
-        },
-        creditCardHolderInfo: {
-          name: customer.name.trim(),
-          email: customer.email.trim(),
-          cpfCnpj: cleanCpfCnpj,
-          postalCode: cleanCep,
-          addressNumber: customer.number?.trim() || "S/N",
-          addressComplement: null,
-          phone: cleanPhone,
-          mobilePhone: cleanPhone
-        }
-      };
-
-      let asaasPayment;
-
-      // Se for parcelado, o Asaas exige o endpoint /installments
-      if (installments > 1) {
-        paymentPayload.totalValue = serverTotal;
-        paymentPayload.installmentCount = installments;
-        
-        asaasPayment = await asaasRequest<any>("/installments", {
-          method: "POST",
-          body: JSON.stringify(paymentPayload),
-        });
-      } else {
-        paymentPayload.value = serverTotal;
-        
-        asaasPayment = await asaasRequest<any>("/payments", {
-          method: "POST",
-          body: JSON.stringify(paymentPayload),
-        });
-      }
-
-      paymentResponse = {
-        orderId: createdOrder.id,
-        paymentId: asaasPayment.id,
-        total: serverTotal,
-        status: asaasPayment.status || "CONFIRMED", 
-        method: "CREDIT_CARD",
-        installments
-      };
-
-    } else {
-      const asaasPayment = await asaasRequest<{ id: string }>("/payments", {
-        method: "POST",
-        body: JSON.stringify({
-          customer: asaasCustomer.id,
-          billingType: "PIX",
-          value: serverTotal,
-          dueDate,
-          description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
-          externalReference: createdOrder.id,
-        }),
-      });
-
-      const pixQrCode = await asaasRequest<{
-        encodedImage: string;
-        payload: string;
-        expirationDate: string;
-      }>(`/payments/${asaasPayment.id}/pixQrCode`, {
-        method: "GET",
-      });
-
-      paymentResponse = {
-        orderId: createdOrder.id,
-        paymentId: asaasPayment.id,
-        total: serverTotal,
-        qrCodeBase64: pixQrCode.encodedImage,
-        pixCopyPaste: pixQrCode.payload,
-        expirationDate: pixQrCode.expirationDate,
-        method: "PIX"
-      };
-    }
-
-    await supabase
-      .from("orders")
-      .update({ asaas_payment_id: paymentResponse.paymentId })
-      .eq("id", createdOrder.id);
-
-    return NextResponse.json(paymentResponse);
+    return NextResponse.json({
+      orderId: createdOrder.id,
+      total: serverTotal,
+      success: true
+    });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
