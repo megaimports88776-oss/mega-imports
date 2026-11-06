@@ -7,9 +7,7 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    console.log("DADOS RECEBIDOS NO CHECKOUT:", JSON.stringify(body, null, 2));
-
-    const { customer, items, paymentMethod, creditCard, creditCardHolderInfo } = body;
+    const { customer, items, paymentMethod, creditCard, installmentCount } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "O carrinho está vazio." }, { status: 400 });
@@ -22,6 +20,7 @@ export async function POST(request: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+    // Se a chave não existir na Vercel, o erro que viu na tela é disparado aqui
     if (!supabaseUrl || !supabaseServiceKey) {
       return NextResponse.json({ error: "Erro de configuração do servidor Supabase." }, { status: 500 });
     }
@@ -30,7 +29,6 @@ export async function POST(request: NextRequest) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Validar produtos no banco
     const productIds = items.map((i: { id: string }) => i.id);
     const { data: dbProducts, error: productsError } = await supabase
       .from("products")
@@ -64,9 +62,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const dueDate = new Date().toISOString().split("T")[0]; // Para cartão, o vencimento é hoje
+    const dueDate = new Date().toISOString().split("T")[0];
 
-    // 1. Criar/Atualizar cliente no Asaas
     const asaasCustomer = await asaasRequest<{ id: string }>("/customers", {
       method: "POST",
       body: JSON.stringify({
@@ -81,7 +78,6 @@ export async function POST(request: NextRequest) {
       }),
     });
 
-    // 2. Criar pedido na base de dados (Supabase)
     const { data: createdOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -110,57 +106,76 @@ export async function POST(request: NextRequest) {
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    // 3. Processar Pagamento no Asaas (Pix ou Cartão)
     let paymentResponse: any = {};
     const asaasPaymentType = paymentMethod === "CREDIT_CARD" ? "CREDIT_CARD" : "PIX";
-
-    const paymentPayload: any = {
-      customer: asaasCustomer.id,
-      billingType: asaasPaymentType,
-      value: serverTotal,
-      dueDate,
-      description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
-      externalReference: createdOrder.id,
-    };
+    const installments = Number(installmentCount) || 1;
 
     if (asaasPaymentType === "CREDIT_CARD") {
-      // Adicionar dados do cartão para cobrança direta
-      paymentPayload.creditCard = {
-        holderName: creditCard.holderName,
-        number: creditCard.number.replace(/\D/g, ""),
-        expiryMonth: creditCard.expiryMonth,
-        expiryYear: creditCard.expiryYear,
-        ccv: creditCard.ccv
+      const paymentPayload: any = {
+        customer: asaasCustomer.id,
+        billingType: "CREDIT_CARD",
+        dueDate,
+        description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
+        externalReference: createdOrder.id,
+        creditCard: {
+          holderName: creditCard.holderName,
+          number: creditCard.number.replace(/\D/g, ""),
+          expiryMonth: creditCard.expiryMonth,
+          expiryYear: creditCard.expiryYear,
+          ccv: creditCard.ccv
+        },
+        creditCardHolderInfo: {
+          name: customer.name.trim(),
+          email: customer.email.trim(),
+          cpfCnpj: cleanCpfCnpj,
+          postalCode: cleanCep,
+          addressNumber: customer.number?.trim() || "S/N",
+          addressComplement: null,
+          phone: cleanPhone,
+          mobilePhone: cleanPhone
+        }
       };
-      paymentPayload.creditCardHolderInfo = {
-        name: customer.name.trim(),
-        email: customer.email.trim(),
-        cpfCnpj: cleanCpfCnpj,
-        postalCode: cleanCep,
-        addressNumber: customer.number?.trim() || "S/N",
-        addressComplement: null,
-        phone: cleanPhone,
-        mobilePhone: cleanPhone
-      };
-      
-      const asaasPayment = await asaasRequest<any>("/payments", {
-        method: "POST",
-        body: JSON.stringify(paymentPayload),
-      });
+
+      let asaasPayment;
+
+      // Se for parcelado, o Asaas exige o endpoint /installments
+      if (installments > 1) {
+        paymentPayload.totalValue = serverTotal;
+        paymentPayload.installmentCount = installments;
+        
+        asaasPayment = await asaasRequest<any>("/installments", {
+          method: "POST",
+          body: JSON.stringify(paymentPayload),
+        });
+      } else {
+        paymentPayload.value = serverTotal;
+        
+        asaasPayment = await asaasRequest<any>("/payments", {
+          method: "POST",
+          body: JSON.stringify(paymentPayload),
+        });
+      }
 
       paymentResponse = {
         orderId: createdOrder.id,
         paymentId: asaasPayment.id,
         total: serverTotal,
-        status: asaasPayment.status, // PODE SER CONFIRMED OU PENDING
-        method: "CREDIT_CARD"
+        status: asaasPayment.status || "CONFIRMED", 
+        method: "CREDIT_CARD",
+        installments
       };
 
     } else {
-      // É PIX, geramos o QR Code
       const asaasPayment = await asaasRequest<{ id: string }>("/payments", {
         method: "POST",
-        body: JSON.stringify(paymentPayload),
+        body: JSON.stringify({
+          customer: asaasCustomer.id,
+          billingType: "PIX",
+          value: serverTotal,
+          dueDate,
+          description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
+          externalReference: createdOrder.id,
+        }),
       });
 
       const pixQrCode = await asaasRequest<{
