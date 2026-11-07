@@ -3,7 +3,7 @@
 import { useState, FormEvent } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, Check, Copy, Lock, ShieldCheck, ShoppingBag, Zap, CreditCard, Smartphone, MessageCircle
+  ArrowLeft, Check, Copy, Lock, ShieldCheck, ShoppingBag, Zap, CreditCard, Smartphone, QrCode
 } from "lucide-react";
 import { useCart } from "@/contexts/CartContext";
 
@@ -13,14 +13,6 @@ function formatBRL(value: number) {
 
 export default function CheckoutPage() {
   const { cart, cartTotal, clearCart } = useCart();
-
-  // ==========================================
-  // CONFIGURAÇÕES DO PIX MANUAL (DONO)
-  // ==========================================
-  const WHATSAPP_NUMERO = "+5573981833787"; 
-  const CHAVE_PIX = "3ae32704-6584-4d22-b73c-79e56fd22307"; 
-  const NOME_RECEBEDOR = "Erick Souza Nunes ";
-  // ==========================================
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -109,15 +101,11 @@ export default function CheckoutPage() {
   };
 
   const handleCopyPix = async () => {
-    await navigator.clipboard.writeText(CHAVE_PIX);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 3000);
-  };
-
-  const openWhatsApp = () => {
-    const idCurto = paymentResult.orderId.slice(0, 8);
-    const mensagem = `Olá! Acabei de fazer um pedido na loja.%0A%0A*Nº do Pedido:* #${idCurto}%0A*Nome:* ${name}%0A*Valor:* ${formatBRL(paymentResult.total)}%0A%0ASegue o meu comprovante de pagamento Pix abaixo:`;
-    window.open(`https://wa.me/${WHATSAPP_NUMERO}?text=${mensagem}`, "_blank");
+    if (paymentResult?.pixCopyPaste) {
+      await navigator.clipboard.writeText(paymentResult.pixCopyPaste);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }
   };
 
   return (
@@ -145,9 +133,6 @@ export default function CheckoutPage() {
         .method-tabs { display: flex; gap: 16px; margin-bottom: 24px; }
         .method-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.08); background: #09090f; color: #a1a1aa; cursor: pointer; font-weight: 600; transition: all 0.2s; }
         .method-btn.active { border-color: #8b5cf6; background: rgba(139,92,246,0.1); color: #fff; }
-        
-        .wpp-btn { background: #25D366; color: white; border: none; border-radius: 12px; padding: 16px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; transition: background 0.2s; margin-top: 16px; }
-        .wpp-btn:hover { background: #128C7E; }
       `}</style>
 
       <div className="ck-wrap">
@@ -165,43 +150,44 @@ export default function CheckoutPage() {
           <div className="ck-pix-box">
             {paymentResult.method === "PIX" ? (
               <>
-                <Check size={52} color="#10b981" style={{ margin: "0 auto 12px" }} />
-                <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pedido Reservado!</h1>
-                <p style={{ color: "#a1a1aa", fontSize: 14, margin: "0 0 16px" }}>Para confirmar sua compra, realize o pagamento via Pix.</p>
+                <QrCode size={52} color="#10b981" style={{ margin: "0 auto 12px" }} />
+                <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pedido Gerado!</h1>
+                <p style={{ color: "#a1a1aa", fontSize: 14, margin: "0 0 16px" }}>Abra o app do seu banco e pague via Pix.</p>
                 
-                <div style={{ fontSize: 28, fontWeight: 900, color: "#a78bfa", marginBottom: 24 }}>
+                <div style={{ fontSize: 28, fontWeight: 900, color: "#10b981", marginBottom: 24 }}>
                   {formatBRL(paymentResult.total)}
                 </div>
 
-                <div style={{ background: "#09090f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 20, marginBottom: 24, textAlign: "left" }}>
-                  <p style={{ margin: "0 0 8px", color: "#a1a1aa", fontSize: 14 }}>Chave Pix (Copie abaixo):</p>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 4 }}>{CHAVE_PIX}</div>
-                  <div style={{ fontSize: 14, color: "#71717a" }}>Nome: {NOME_RECEBEDOR}</div>
+                {paymentResult.qrCodeBase64 && (
+                  <div style={{ background: "#fff", padding: 16, borderRadius: 12, display: "inline-block", marginBottom: 24 }}>
+                    <img 
+                      src={`data:image/jpeg;base64,${paymentResult.qrCodeBase64}`} 
+                      alt="QR Code Pix" 
+                      style={{ width: 220, height: 220, display: "block" }} 
+                    />
+                  </div>
+                )}
+
+                <div style={{ background: "#09090f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 16, marginBottom: 24, textAlign: "left" }}>
+                  <p style={{ margin: "0 0 8px", color: "#a1a1aa", fontSize: 13 }}>Pix Copia e Cola:</p>
+                  <div style={{ fontSize: 13, color: "#fff", wordBreak: "break-all" }}>{paymentResult.pixCopyPaste}</div>
                 </div>
 
-                <button type="button" onClick={handleCopyPix} className="ck-submit" style={{ background: "#3f3f46", color: "#fff" }}>
-                  {copied ? <>Chave Copiada! <Check size={18} /></> : <>Copiar Chave Pix <Copy size={18} /></>}
+                <button type="button" onClick={handleCopyPix} className="ck-submit" style={{ background: "#10b981", color: "#fff" }}>
+                  {copied ? <>Código Copiado! <Check size={18} /></> : <>Copiar Código Pix <Copy size={18} /></>}
                 </button>
-
-                <div style={{ margin: "24px 0", height: 1, background: "rgba(255,255,255,0.08)" }} />
-
-                <h3 style={{ fontSize: 16, marginBottom: 12 }}>Já fez o pagamento?</h3>
-                <p style={{ color: "#a1a1aa", fontSize: 14, marginBottom: 16 }}>Envie o comprovante no nosso WhatsApp para liberarmos o envio imediatamente.</p>
                 
-                <button type="button" onClick={openWhatsApp} className="wpp-btn">
-                  <MessageCircle size={22} />
-                  Enviar Comprovante
-                </button>
+                <p style={{ color: "#71717a", fontSize: 12, marginTop: 24 }}>Pedido: #{paymentResult.orderId.slice(0, 8)}</p>
               </>
             ) : (
               <>
                 <Check size={52} color="#10b981" style={{ margin: "0 auto 16px" }} />
                 <h1 style={{ fontSize: 24, margin: "0 0 8px" }}>Pagamento Aprovado!</h1>
-                <p style={{ color: "#a1a1aa", fontSize: 15, margin: "0 0 24px" }}>O seu pagamento por cartão foi recebido e processado com sucesso pelo Asaas.</p>
+                <p style={{ color: "#a1a1aa", fontSize: 15, margin: "0 0 24px" }}>O seu pagamento por cartão foi recebido e processado com sucesso.</p>
                 <Link href="/" className="ck-submit" style={{ textDecoration: "none" }}>Voltar à Loja</Link>
+                <p style={{ color: "#71717a", fontSize: 12, marginTop: 24 }}>Pedido: #{paymentResult.orderId.slice(0, 8)}</p>
               </>
             )}
-            <p style={{ color: "#71717a", fontSize: 12, marginTop: 24 }}>Pedido: #{paymentResult.orderId.slice(0, 8)}</p>
           </div>
         ) : cart.length === 0 ? (
           <div className="ck-pix-box">
@@ -251,7 +237,7 @@ export default function CheckoutPage() {
                 
                 <div className="method-tabs">
                   <button type="button" className={`method-btn ${paymentMethod === "PIX" ? "active" : ""}`} onClick={() => setPaymentMethod("PIX")}>
-                    <Smartphone size={18} /> Pix (S/ Taxas)
+                    <Smartphone size={18} /> Pix
                   </button>
                   <button type="button" className={`method-btn ${paymentMethod === "CREDIT_CARD" ? "active" : ""}`} onClick={() => setPaymentMethod("CREDIT_CARD")}>
                     <CreditCard size={18} /> Cartão
@@ -288,7 +274,7 @@ export default function CheckoutPage() {
                       >
                         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => {
                           const val = cartTotal / num;
-                          if (num > 1 && val < 5) return null; // Regra Asaas parcela mín $5
+                          if (num > 1 && val < 5) return null;
                           return (
                             <option key={num} value={num}>
                               {num}x de {formatBRL(val)} {num === 1 ? "à vista" : "sem juros"}
@@ -301,7 +287,7 @@ export default function CheckoutPage() {
                 )}
 
                 {paymentMethod === "PIX" && (
-                  <p style={{ color: "#a1a1aa", fontSize: 14 }}>Você pagará diretamente para a nossa chave Pix na próxima tela. Totalmente livre de taxas!</p>
+                  <p style={{ color: "#a1a1aa", fontSize: 14 }}>Você poderá escanear o QR Code ou usar o Pix Copia e Cola na próxima tela. A aprovação é imediata.</p>
                 )}
               </div>
 
