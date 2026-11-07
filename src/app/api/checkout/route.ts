@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { asaasRequest } from "@/lib/asaas/client";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { customer, items, paymentMethod, creditCard, installmentCount } = body;
+    // cardToken será enviado pelo frontend quando implementarmos o cartão via SDK
+    const { customer, items, paymentMethod, cardToken, installmentCount, issuerId } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "O carrinho está vazio." }, { status: 400 });
@@ -19,9 +19,10 @@ export async function POST(request: NextRequest) {
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const mpAccessToken = process.env.MP_ACCESS_TOKEN;
 
-    if (!supabaseUrl || !supabaseServiceKey) {
-      return NextResponse.json({ error: "Erro de configuração do servidor Supabase." }, { status: 500 });
+    if (!supabaseUrl || !supabaseServiceKey || !mpAccessToken) {
+      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou Mercado Pago)." }, { status: 500 });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Criar o pedido PENDENTE no Supabase primeiro
+    // Criar o pedido PENDENTE no Supabase
     const { data: createdOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -91,91 +92,73 @@ export async function POST(request: NextRequest) {
     );
 
     // ==========================================
-    // DIVISÃO DE PAGAMENTO: ASAAS (CARTÃO) VS MANUAL (PIX)
+    // INTEGRAÇÃO MERCADO PAGO API (V1)
     // ==========================================
-    if (paymentMethod === "CREDIT_CARD") {
-      // 1. Criar/Atualizar cliente no Asaas
-      const asaasCustomer = await asaasRequest<{ id: string }>("/customers", {
-        method: "POST",
-        body: JSON.stringify({
-          name: customer.name.trim(),
-          email: customer.email.trim(),
-          cpfCnpj: cleanCpfCnpj,
-          mobilePhone: cleanPhone,
-          postalCode: cleanCep,
-          address: customer.address?.trim() || "Não informado",
-          addressNumber: customer.number?.trim() || "S/N",
-          province: customer.neighborhood?.trim() || "Geral",
-        }),
-      });
-
-      await supabase.from("orders").update({ asaas_customer_id: asaasCustomer.id }).eq("id", createdOrder.id);
-
-      const dueDate = new Date().toISOString().split("T")[0];
-      const installments = Number(installmentCount) || 1;
-
-      const paymentPayload: any = {
-        customer: asaasCustomer.id,
-        billingType: "CREDIT_CARD",
-        dueDate,
-        description: `Pedido Mega Imports #${createdOrder.id.slice(0, 8)}`,
-        externalReference: createdOrder.id,
-        creditCard: {
-          holderName: creditCard.holderName,
-          number: creditCard.number.replace(/\D/g, ""),
-          expiryMonth: creditCard.expiryMonth,
-          expiryYear: creditCard.expiryYear,
-          ccv: creditCard.ccv
-        },
-        creditCardHolderInfo: {
-          name: customer.name.trim(),
-          email: customer.email.trim(),
-          cpfCnpj: cleanCpfCnpj,
-          postalCode: cleanCep,
-          addressNumber: customer.number?.trim() || "S/N",
-          addressComplement: null,
-          phone: cleanPhone,
-          mobilePhone: cleanPhone
+    
+    const mpPayload: any = {
+      transaction_amount: serverTotal,
+      description: `Mega Imports - Pedido #${createdOrder.id.slice(0, 8)}`,
+      external_reference: createdOrder.id,
+      payer: {
+        email: customer.email.trim(),
+        first_name: customer.name.trim().split(" ")[0],
+        last_name: customer.name.trim().split(" ").slice(1).join(" "),
+        identification: {
+          type: cleanCpfCnpj.length > 11 ? "CNPJ" : "CPF",
+          number: cleanCpfCnpj
         }
-      };
-
-      let asaasPayment;
-
-      // Processar parcelamento no Asaas se for > 1
-      if (installments > 1) {
-        paymentPayload.totalValue = serverTotal;
-        paymentPayload.installmentCount = installments;
-        asaasPayment = await asaasRequest<any>("/installments", {
-          method: "POST",
-          body: JSON.stringify(paymentPayload),
-        });
-      } else {
-        paymentPayload.value = serverTotal;
-        asaasPayment = await asaasRequest<any>("/payments", {
-          method: "POST",
-          body: JSON.stringify(paymentPayload),
-        });
       }
+    };
 
-      // Atualizar o ID do pagamento no Supabase
-      await supabase.from("orders").update({ asaas_payment_id: asaasPayment.id }).eq("id", createdOrder.id);
+    if (paymentMethod === "PIX") {
+      mpPayload.payment_method_id = "pix";
+    } else if (paymentMethod === "CREDIT_CARD") {
+      if (!cardToken) {
+        return NextResponse.json({ error: "Token do cartão não fornecido pelo frontend." }, { status: 400 });
+      }
+      mpPayload.token = cardToken;
+      mpPayload.installments = Number(installmentCount) || 1;
+      mpPayload.payment_method_id = "credit_card"; 
+      if (issuerId) mpPayload.issuer_id = issuerId;
+    }
 
+    const mpResponse = await fetch("https://api.mercadopago.com/v1/payments", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${mpAccessToken}`,
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": createdOrder.id // Evita pagamentos duplicados
+      },
+      body: JSON.stringify(mpPayload)
+    });
+
+    const mpData = await mpResponse.json();
+
+    if (!mpResponse.ok || mpData.error) {
+      console.error("Erro Mercado Pago:", mpData);
+      return NextResponse.json({ error: `Erro no pagamento: ${mpData.message || 'Falha na transação'}` }, { status: 400 });
+    }
+
+    await supabase.from("orders").update({ asaas_payment_id: String(mpData.id) }).eq("id", createdOrder.id);
+
+    if (paymentMethod === "PIX") {
       return NextResponse.json({
         orderId: createdOrder.id,
-        paymentId: asaasPayment.id,
+        paymentId: mpData.id,
         total: serverTotal,
-        status: asaasPayment.status || "CONFIRMED", 
-        method: "CREDIT_CARD",
-        installments
-      });
-
-    } else {
-      // É PIX MANUAL, ignoramos o Asaas e retornamos sucesso direto
-      return NextResponse.json({
-        orderId: createdOrder.id,
-        total: serverTotal,
+        qrCodeBase64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
+        pixCopyPaste: mpData.point_of_interaction?.transaction_data?.qr_code,
         method: "PIX",
-        success: true
+        status: mpData.status
+      });
+    } else {
+      return NextResponse.json({
+        orderId: createdOrder.id,
+        paymentId: mpData.id,
+        total: serverTotal,
+        status: mpData.status,
+        method: "CREDIT_CARD",
+        installments: mpPayload.installments
       });
     }
     
