@@ -6,8 +6,7 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    // cardToken será enviado pelo frontend quando implementarmos o cartão via SDK
-    const { customer, items, paymentMethod, cardToken, installmentCount, issuerId } = body;
+    const { customer, items } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "O carrinho está vazio." }, { status: 400 });
@@ -29,7 +28,6 @@ export async function POST(request: NextRequest) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Validar produtos
     const productIds = items.map((i: { id: string }) => i.id);
     const { data: dbProducts, error: productsError } = await supabase
       .from("products")
@@ -63,7 +61,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Criar o pedido PENDENTE no Supabase
     const { data: createdOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -92,75 +89,55 @@ export async function POST(request: NextRequest) {
     );
 
     // ==========================================
-    // INTEGRAÇÃO MERCADO PAGO API (V1)
+    // INTEGRAÇÃO MERCADO PAGO - CHECKOUT PRO
     // ==========================================
-    
-    const mpPayload: any = {
-      transaction_amount: serverTotal,
-      description: `Mega Imports - Pedido #${createdOrder.id.slice(0, 8)}`,
-      external_reference: createdOrder.id,
+    const origin = request.headers.get("origin") || "https://sua-loja-aqui.com";
+
+    const preferencePayload = {
+      items: [
+        {
+          id: createdOrder.id,
+          title: `Mega Imports - Pedido #${createdOrder.id.slice(0, 8)}`,
+          quantity: 1,
+          currency_id: "BRL",
+          unit_price: serverTotal
+        }
+      ],
       payer: {
+        name: customer.name.trim(),
         email: customer.email.trim(),
-        first_name: customer.name.trim().split(" ")[0],
-        last_name: customer.name.trim().split(" ").slice(1).join(" "),
         identification: {
           type: cleanCpfCnpj.length > 11 ? "CNPJ" : "CPF",
           number: cleanCpfCnpj
         }
-      }
+      },
+      external_reference: createdOrder.id,
+      back_urls: {
+        success: `${origin}/`,
+        failure: `${origin}/checkout`,
+        pending: `${origin}/`
+      },
+      auto_return: "approved"
     };
 
-    if (paymentMethod === "PIX") {
-      mpPayload.payment_method_id = "pix";
-    } else if (paymentMethod === "CREDIT_CARD") {
-      if (!cardToken) {
-        return NextResponse.json({ error: "Token do cartão não fornecido pelo frontend." }, { status: 400 });
-      }
-      mpPayload.token = cardToken;
-      mpPayload.installments = Number(installmentCount) || 1;
-      mpPayload.payment_method_id = "credit_card"; 
-      if (issuerId) mpPayload.issuer_id = issuerId;
-    }
-
-    const mpResponse = await fetch("https://api.mercadopago.com/v1/payments", {
+    const mpResponse = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${mpAccessToken}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": createdOrder.id // Evita pagamentos duplicados
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify(mpPayload)
+      body: JSON.stringify(preferencePayload)
     });
 
     const mpData = await mpResponse.json();
 
-    if (!mpResponse.ok || mpData.error) {
-      console.error("Erro Mercado Pago:", mpData);
-      return NextResponse.json({ error: `Erro no pagamento: ${mpData.message || 'Falha na transação'}` }, { status: 400 });
+    if (!mpResponse.ok) {
+      console.error("Erro MP Preferences:", mpData);
+      return NextResponse.json({ error: "Erro ao gerar link de pagamento do Mercado Pago." }, { status: 400 });
     }
 
-    await supabase.from("orders").update({ asaas_payment_id: String(mpData.id) }).eq("id", createdOrder.id);
-
-    if (paymentMethod === "PIX") {
-      return NextResponse.json({
-        orderId: createdOrder.id,
-        paymentId: mpData.id,
-        total: serverTotal,
-        qrCodeBase64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
-        pixCopyPaste: mpData.point_of_interaction?.transaction_data?.qr_code,
-        method: "PIX",
-        status: mpData.status
-      });
-    } else {
-      return NextResponse.json({
-        orderId: createdOrder.id,
-        paymentId: mpData.id,
-        total: serverTotal,
-        status: mpData.status,
-        method: "CREDIT_CARD",
-        installments: mpPayload.installments
-      });
-    }
+    // Retorna o link de redirecionamento para o frontend
+    return NextResponse.json({ initPoint: mpData.init_point });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
