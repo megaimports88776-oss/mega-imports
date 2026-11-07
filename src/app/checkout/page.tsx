@@ -10,7 +10,7 @@ function formatBRL(value: number) {
 }
 
 export default function CheckoutPage() {
-  const { cart, cartTotal, clearCart } = useCart();
+  const { cart, cartTotal } = useCart();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -61,7 +61,6 @@ export default function CheckoutPage() {
       if (!response.ok) throw new Error(data.error || "Erro ao processar o checkout.");
 
       if (data.initPoint) {
-        clearCart();
         window.location.href = data.initPoint; // Redireciona imediatamente para o Mercado Pago
       }
     } catch (err: unknown) {
