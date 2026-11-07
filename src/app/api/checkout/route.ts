@@ -103,7 +103,10 @@ export async function POST(request: NextRequest) {
         email: customer.email.trim(),
         first_name: customer.name.trim().split(" ")[0],
         last_name: customer.name.trim().split(" ").slice(1).join(" "),
-        // CPF removido propositalmente para não cruzar dados e bloquear Pix de terceiros
+        identification: {
+          type: cleanCpfCnpj.length > 11 ? "CNPJ" : "CPF",
+          number: cleanCpfCnpj
+        }
       }
     };
 
