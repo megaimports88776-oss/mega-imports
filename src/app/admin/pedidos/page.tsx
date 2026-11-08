@@ -3,11 +3,11 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Inicializa o Supabase (garanta que as variáveis de ambiente estão corretas no .env.local)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// Usamos um fallback ('https://dummy.supabase.co' e 'dummy-key') para evitar o erro de prerender da Vercel
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://dummy.supabase.co';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'dummy-key';
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default function AdminPedidos() {
   const [pedidos, setPedidos] = useState<any[]>([]);
@@ -16,7 +16,9 @@ export default function AdminPedidos() {
 
   useEffect(() => {
     async function fetchPedidos() {
-      // Puxa os pedidos ordenados dos mais recentes para os mais antigos
+      // Se estiver rodando com o dummy falso do build, aborta a busca para não dar erro no console
+      if (supabaseUrl === 'https://dummy.supabase.co') return;
+
       const { data, error } = await supabase
         .from('orders')
         .select('*')
@@ -50,14 +52,13 @@ export default function AdminPedidos() {
   };
 
   if (loading) {
-    return <div className="p-8 text-white">Carregando pedidos da Mega Imports...</div>;
+    return <div className="min-h-screen bg-gray-900 p-8 text-white flex items-center justify-center">Carregando pedidos da Mega Imports...</div>;
   }
 
   return (
     <div className="min-h-screen bg-gray-900 p-8 text-white">
       <h1 className="text-3xl font-bold mb-8">Pedidos dos Clientes</h1>
 
-      {/* GRADE DE CLIENTES: Um ao lado do outro, descendo a linha quando enche */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {pedidos.map((pedido) => (
           <div
@@ -81,12 +82,10 @@ export default function AdminPedidos() {
         )}
       </div>
 
-      {/* MODAL DE DETALHES DO CLIENTE */}
       {pedidoSelecionado && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-xl p-8 max-w-md w-full border border-gray-600 shadow-2xl relative">
             
-            {/* Botão de Fechar */}
             <button 
               onClick={() => setPedidoSelecionado(null)}
               className="absolute top-4 right-4 text-gray-400 hover:text-white"
@@ -114,7 +113,6 @@ export default function AdminPedidos() {
               </div>
             </div>
 
-            {/* Ações do Admin */}
             <div className="mt-6 flex flex-col gap-3">
               <button 
                 onClick={() => abrirWhatsApp(pedidoSelecionado.customer_phone, pedidoSelecionado.customer_name)}
