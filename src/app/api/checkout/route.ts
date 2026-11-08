@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
     const accessToken = tokenData.access_token;
     const origin = request.headers.get("origin") || "https://sua-loja.com";
 
-    // 2. Criar o Checkout através da rota de Produtos
+    // 2. Criar o Checkout 
     const caktoPayload = {
       name: `Pedido #${createdOrder.id.split('-')[0]} - Mega Imports`,
       description: descricoesItens.join(", "),
@@ -157,7 +157,6 @@ export async function POST(request: NextRequest) {
       initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
     }
 
-    // A MÁGICA FINAL: Montando a URL com short_id + id da oferta
     if (!initPoint && caktoData.short_id && caktoData.offers && caktoData.offers.length > 0) {
       const offerId = caktoData.offers[0].checkout;
       initPoint = `https://pay.cakto.com.br/${caktoData.short_id}_${offerId}`;
@@ -167,14 +166,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "O checkout foi criado, mas a URL não pôde ser montada." }, { status: 500 });
     }
 
-    // Adiciona os dados do cliente na URL para pré-preencher o ecrã
-    const checkoutCompleto = `${initPoint}?name=${encodeURIComponent(customer.name.trim())}&email=${encodeURIComponent(customer.email.trim())}&document=${cleanCpfCnpj}&phone=${cleanPhone}`;
-
     await supabase.from("order_items").insert(
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    return NextResponse.json({ initPoint: checkoutCompleto });
+    // Retornando o link 100% limpo, igual ao painel
+    return NextResponse.json({ initPoint });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
