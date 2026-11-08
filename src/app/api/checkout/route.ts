@@ -112,7 +112,6 @@ export async function POST(request: NextRequest) {
     try {
       tokenData = JSON.parse(tokenText);
     } catch (e) {
-      console.error("ERRO HTML TOKEN CAKTO:", tokenText);
       return NextResponse.json({ error: "Erro ao gerar token Cakto." }, { status: 500 });
     }
 
@@ -149,31 +148,30 @@ export async function POST(request: NextRequest) {
     try {
       caktoData = JSON.parse(caktoText);
     } catch (e) {
-      console.error("ERRO HTML PRODUTO CAKTO:", caktoText);
       return NextResponse.json({ error: "A Cakto devolveu HTML em vez de criar o produto." }, { status: 500 });
     }
-
-    // Console.log para gravar na Vercel como a Cakto devolve o link, caso falhe no frontend
-    console.log("RESPOSTA DE SUCESSO DA CAKTO:", caktoData);
 
     if (!caktoResponse.ok) {
       return NextResponse.json({ error: "Erro ao gerar link de pagamento na Cakto." }, { status: 400 });
     }
 
-    // A Cakto deve devolver a URL do checkout dentro do objeto criado.
-    // Procuramos a URL em várias propriedades possíveis baseadas em APIs similares.
+    // A Cakto retorna um 'short_id'. Nós juntamos isso com o domínio de pagamento deles.
     let initPoint = caktoData.checkout_url || caktoData.url || caktoData.payment_url;
     
-    // Se estiver dentro de um objeto 'data' (comum em retornos de APIs REST)
     if (!initPoint && caktoData.data) {
       initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
+    }
+
+    // MÁGICA AQUI: Construindo a URL com o short_id
+    if (!initPoint && caktoData.short_id) {
+      initPoint = `https://pay.cakto.com.br/${caktoData.short_id}`;
     }
 
     if (!initPoint) {
       return NextResponse.json({ error: "O checkout foi criado, mas a Cakto não retornou a URL." }, { status: 500 });
     }
 
-    // Opcional: Adiciona os dados do cliente na URL para pré-preencher o ecrã da Cakto
+    // Adiciona os dados do cliente na URL para pré-preencher o ecrã da Cakto
     const checkoutCompleto = `${initPoint}?name=${encodeURIComponent(customer.name.trim())}&email=${encodeURIComponent(customer.email.trim())}&document=${cleanCpfCnpj}&phone=${cleanPhone}`;
 
     await supabase.from("order_items").insert(
