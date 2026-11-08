@@ -87,10 +87,6 @@ export async function POST(request: NextRequest) {
     if (orderError || !createdOrder) {
       return NextResponse.json({ error: "Erro ao salvar pedido." }, { status: 500 });
     }
-
-    // ==========================================
-    // INTEGRAÇÃO CAKTO PAY (Nova Rota /products/)
-    // ==========================================
     
     // 1. Gerar Token 
     const tokenResponse = await fetch("https://api.cakto.com.br/public_api/token/", {
@@ -155,23 +151,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Erro ao gerar link de pagamento na Cakto." }, { status: 400 });
     }
 
-    // A Cakto retorna um 'short_id'. Nós juntamos isso com o domínio de pagamento deles.
     let initPoint = caktoData.checkout_url || caktoData.url || caktoData.payment_url;
     
     if (!initPoint && caktoData.data) {
       initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
     }
 
-    // MÁGICA AQUI: Construindo a URL com o short_id
-    if (!initPoint && caktoData.short_id) {
-      initPoint = `https://pay.cakto.com.br/${caktoData.short_id}`;
+    // A MÁGICA FINAL: Montando a URL com short_id + id da oferta
+    if (!initPoint && caktoData.short_id && caktoData.offers && caktoData.offers.length > 0) {
+      const offerId = caktoData.offers[0].checkout;
+      initPoint = `https://pay.cakto.com.br/${caktoData.short_id}_${offerId}`;
     }
 
     if (!initPoint) {
-      return NextResponse.json({ error: "O checkout foi criado, mas a Cakto não retornou a URL." }, { status: 500 });
+      return NextResponse.json({ error: "O checkout foi criado, mas a URL não pôde ser montada." }, { status: 500 });
     }
 
-    // Adiciona os dados do cliente na URL para pré-preencher o ecrã da Cakto
+    // Adiciona os dados do cliente na URL para pré-preencher o ecrã
     const checkoutCompleto = `${initPoint}?name=${encodeURIComponent(customer.name.trim())}&email=${encodeURIComponent(customer.email.trim())}&document=${cleanCpfCnpj}&phone=${cleanPhone}`;
 
     await supabase.from("order_items").insert(
