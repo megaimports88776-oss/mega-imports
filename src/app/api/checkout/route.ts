@@ -16,16 +16,13 @@ export async function POST(request: NextRequest) {
     const cleanPhone = (customer?.phone || "").replace(/\D/g, "");
     const cleanCep = (customer?.cep || "").replace(/\D/g, "");
 
-    // Separar DDD do Número de Telefone (Exigência do PagBank)
-    const phoneArea = cleanPhone.substring(0, 2);
-    const phoneNumber = cleanPhone.substring(2);
-
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const pagbankToken = process.env.PAGBANK_TOKEN;
+    const clientId = process.env.CAKTO_CLIENT_ID;
+    const clientSecret = process.env.CAKTO_CLIENT_SECRET;
 
-    if (!supabaseUrl || !supabaseServiceKey || !pagbankToken) {
-      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou PagBank)." }, { status: 500 });
+    if (!supabaseUrl || !supabaseServiceKey || !clientId || !clientSecret) {
+      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou Cakto)." }, { status: 500 });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -44,7 +41,6 @@ export async function POST(request: NextRequest) {
 
     let serverTotal = 0;
     const validatedItems = [];
-    const pagbankItems = [];
 
     for (const cartItem of items) {
       const dbProduct = dbProducts.find((p) => p.id === cartItem.id);
@@ -63,13 +59,6 @@ export async function POST(request: NextRequest) {
         unit_price: unitPrice,
         quantity: qty,
         subtotal,
-      });
-
-      // O PagBank exige que o valor seja enviado em CENTAVOS (Inteiro)
-      pagbankItems.push({
-        name: dbProduct.name,
-        quantity: qty,
-        unit_amount: Math.round(unitPrice * 100) 
       });
     }
 
@@ -101,54 +90,77 @@ export async function POST(request: NextRequest) {
     );
 
     // ==========================================
-    // INTEGRAÇÃO PAGBANK (CHECKOUT V4)
+    // INTEGRAÇÃO CAKTO PAY (Gerar Token + Checkout)
     // ==========================================
+    
+    // 1. Gerar o Token de Acesso da Cakto
+    const tokenResponse = await fetch("https://api.cakto.com.br/public_api/token/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        "client_id": clientId,
+        "client_secret": clientSecret
+      }).toString()
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error("Erro Auth Cakto:", tokenData);
+      return NextResponse.json({ error: "Falha ao autenticar na Cakto." }, { status: 500 });
+    }
+
+    const accessToken = tokenData.access_token;
     const origin = request.headers.get("origin") || "https://sua-loja.com";
 
-    const pagbankPayload = {
-      reference_id: createdOrder.id,
+    // 2. Gerar o Link de Pagamento com o Token Fresco
+    const caktoPayload = {
+      amount: Math.round(serverTotal * 100), // Valor em centavos
       customer: {
         name: customer.name.trim(),
         email: customer.email.trim(),
-        tax_id: cleanCpfCnpj,
-        phones: [
-          {
-            country: "55",
-            area: phoneArea,
-            number: phoneNumber,
-            type: "MOBILE"
-          }
-        ]
+        document: cleanCpfCnpj,
+        phone: cleanPhone
       },
-      items: pagbankItems,
-      redirect_url: `${origin}/`,
+      items: validatedItems.map((item) => ({
+        title: item.product_name,
+        quantity: item.quantity,
+        unit_price: Math.round(item.unit_price * 100),
+        tangible: true
+      })),
+      metadata: {
+        order_id: createdOrder.id
+      },
+      success_url: `${origin}/sucesso`,
+      cancel_url: `${origin}/carrinho`
     };
 
-    const pagbankResponse = await fetch("https://api.pagseguro.com/checkouts", {
+    const caktoResponse = await fetch("https://api.cakto.com.br/v1/checkouts", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${pagbankToken}`,
-        "Content-Type": "application/json"
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
       },
-      body: JSON.stringify(pagbankPayload)
+      body: JSON.stringify(caktoPayload)
     });
 
-    const pagbankData = await pagbankResponse.json();
+    const caktoData = await caktoResponse.json();
 
-    if (!pagbankResponse.ok) {
-      console.error("Erro PagBank:", pagbankData);
-      return NextResponse.json({ error: "Erro ao gerar link de pagamento do PagBank." }, { status: 400 });
+    if (!caktoResponse.ok) {
+      console.error("Erro Checkout Cakto:", caktoData);
+      return NextResponse.json({ error: "Erro ao gerar link de pagamento na Cakto." }, { status: 400 });
     }
 
-    // O PagBank devolve um array de links. Nós queremos o link que redireciona para a tela de pagamento ("PAY")
-    const payLinkObj = pagbankData.links?.find((link: any) => link.rel === "PAY");
+    const initPoint = caktoData.checkout_url || caktoData.payment_url || caktoData.url;
 
-    if (!payLinkObj || !payLinkObj.href) {
-      return NextResponse.json({ error: "Link de pagamento não retornado pelo PagBank." }, { status: 500 });
+    if (!initPoint) {
+      return NextResponse.json({ error: "Link não retornado pela Cakto." }, { status: 500 });
     }
 
-    // Enviamos como "initPoint" para o frontend não precisar de nenhuma alteração!
-    return NextResponse.json({ initPoint: payLinkObj.href });
+    return NextResponse.json({ initPoint });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
