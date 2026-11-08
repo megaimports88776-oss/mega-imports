@@ -16,12 +16,16 @@ export async function POST(request: NextRequest) {
     const cleanPhone = (customer?.phone || "").replace(/\D/g, "");
     const cleanCep = (customer?.cep || "").replace(/\D/g, "");
 
+    // Separar DDD do Número de Telefone (Exigência do PagBank)
+    const phoneArea = cleanPhone.substring(0, 2);
+    const phoneNumber = cleanPhone.substring(2);
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const mpAccessToken = process.env.MP_ACCESS_TOKEN;
+    const pagbankToken = process.env.PAGBANK_TOKEN;
 
-    if (!supabaseUrl || !supabaseServiceKey || !mpAccessToken) {
-      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou Mercado Pago)." }, { status: 500 });
+    if (!supabaseUrl || !supabaseServiceKey || !pagbankToken) {
+      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou PagBank)." }, { status: 500 });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -40,6 +44,7 @@ export async function POST(request: NextRequest) {
 
     let serverTotal = 0;
     const validatedItems = [];
+    const pagbankItems = [];
 
     for (const cartItem of items) {
       const dbProduct = dbProducts.find((p) => p.id === cartItem.id);
@@ -58,6 +63,13 @@ export async function POST(request: NextRequest) {
         unit_price: unitPrice,
         quantity: qty,
         subtotal,
+      });
+
+      // O PagBank exige que o valor seja enviado em CENTAVOS (Inteiro)
+      pagbankItems.push({
+        name: dbProduct.name,
+        quantity: qty,
+        unit_amount: Math.round(unitPrice * 100) 
       });
     }
 
@@ -89,55 +101,54 @@ export async function POST(request: NextRequest) {
     );
 
     // ==========================================
-    // INTEGRAÇÃO MERCADO PAGO - CHECKOUT PRO
+    // INTEGRAÇÃO PAGBANK (CHECKOUT V4)
     // ==========================================
-    const origin = request.headers.get("origin") || "https://sua-loja-aqui.com";
+    const origin = request.headers.get("origin") || "https://sua-loja.com";
 
-    const preferencePayload = {
-      items: [
-        {
-          id: createdOrder.id,
-          title: `Mega Imports - Pedido #${createdOrder.id.slice(0, 8)}`,
-          quantity: 1,
-          currency_id: "BRL",
-          unit_price: serverTotal
-        }
-      ],
-      payer: {
+    const pagbankPayload = {
+      reference_id: createdOrder.id,
+      customer: {
         name: customer.name.trim(),
         email: customer.email.trim(),
-        identification: {
-          type: cleanCpfCnpj.length > 11 ? "CNPJ" : "CPF",
-          number: cleanCpfCnpj
-        }
+        tax_id: cleanCpfCnpj,
+        phones: [
+          {
+            country: "55",
+            area: phoneArea,
+            number: phoneNumber,
+            type: "MOBILE"
+          }
+        ]
       },
-      external_reference: createdOrder.id,
-      back_urls: {
-        success: `${origin}/`,
-        failure: `${origin}/checkout`,
-        pending: `${origin}/`
-      },
-      auto_return: "approved"
+      items: pagbankItems,
+      redirect_url: `${origin}/`,
     };
 
-    const mpResponse = await fetch("https://api.mercadopago.com/checkout/preferences", {
+    const pagbankResponse = await fetch("https://api.pagseguro.com/checkouts", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${mpAccessToken}`,
+        "Authorization": `Bearer ${pagbankToken}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(preferencePayload)
+      body: JSON.stringify(pagbankPayload)
     });
 
-    const mpData = await mpResponse.json();
+    const pagbankData = await pagbankResponse.json();
 
-    if (!mpResponse.ok) {
-      console.error("Erro MP Preferences:", mpData);
-      return NextResponse.json({ error: "Erro ao gerar link de pagamento do Mercado Pago." }, { status: 400 });
+    if (!pagbankResponse.ok) {
+      console.error("Erro PagBank:", pagbankData);
+      return NextResponse.json({ error: "Erro ao gerar link de pagamento do PagBank." }, { status: 400 });
     }
 
-    // Retorna o link de redirecionamento para o frontend
-    return NextResponse.json({ initPoint: mpData.init_point });
+    // O PagBank devolve um array de links. Nós queremos o link que redireciona para a tela de pagamento ("PAY")
+    const payLinkObj = pagbankData.links?.find((link: any) => link.rel === "PAY");
+
+    if (!payLinkObj || !payLinkObj.href) {
+      return NextResponse.json({ error: "Link de pagamento não retornado pelo PagBank." }, { status: 500 });
+    }
+
+    // Enviamos como "initPoint" para o frontend não precisar de nenhuma alteração!
+    return NextResponse.json({ initPoint: payLinkObj.href });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
