@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
     const accessToken = tokenData.access_token;
     const origin = request.headers.get("origin") || "https://sua-loja.com";
 
-    // 2. Criar o Checkout 
+    // 2. Criar o Checkout através da rota de Produtos
     const caktoPayload = {
       name: `Pedido #${createdOrder.id.split('-')[0]} - Mega Imports`,
       description: descricoesItens.join(", "),
@@ -157,9 +157,13 @@ export async function POST(request: NextRequest) {
       initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
     }
 
-    if (!initPoint && caktoData.short_id && caktoData.offers && caktoData.offers.length > 0) {
-      const offerId = caktoData.offers[0].checkout;
-      initPoint = `https://pay.cakto.com.br/${caktoData.short_id}_${offerId}`;
+    // A MÁGICA FINAL BASEADA NA DOCUMENTAÇÃO DA CAKTO
+    if (!initPoint && caktoData.offers && caktoData.offers.length > 0) {
+      const idDaOferta = caktoData.offers[0].id;
+      const checkoutId = caktoData.offers[0].checkout;
+      
+      // Monta o link exatamente no formato que apareceu no seu print do painel:
+      initPoint = `https://pay.cakto.com.br/${idDaOferta}_${checkoutId}`;
     }
 
     if (!initPoint) {
@@ -170,7 +174,7 @@ export async function POST(request: NextRequest) {
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    // Retornando o link 100% limpo, igual ao painel
+    // Retorna o link sem parâmetros adicionais, para evitar Erro 404
     return NextResponse.json({ initPoint });
     
   } catch (err: unknown) {
