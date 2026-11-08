@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
 
     let serverTotal = 0;
     const validatedItems = [];
+    const descricoesItens = [];
 
     for (const cartItem of items) {
       const dbProduct = dbProducts.find((p) => p.id === cartItem.id);
@@ -60,6 +61,8 @@ export async function POST(request: NextRequest) {
         quantity: qty,
         subtotal,
       });
+      
+      descricoesItens.push(`${qty}x ${dbProduct.name}`);
     }
 
     const { data: createdOrder, error: orderError } = await supabase
@@ -86,15 +89,15 @@ export async function POST(request: NextRequest) {
     }
 
     // ==========================================
-    // INTEGRAÇÃO CAKTO PAY
+    // INTEGRAÇÃO CAKTO PAY (Nova Rota /products/)
     // ==========================================
     
-    // 1. Gerar Token (Com cabeçalhos de segurança para evitar Firewall)
+    // 1. Gerar Token 
     const tokenResponse = await fetch("https://api.cakto.com.br/public_api/token/", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
         "Accept": "application/json"
       },
       body: new URLSearchParams({
@@ -109,45 +112,33 @@ export async function POST(request: NextRequest) {
     try {
       tokenData = JSON.parse(tokenText);
     } catch (e) {
-      console.error("ERRO HTML NO TOKEN DA CAKTO:", tokenText);
-      return NextResponse.json({ error: "O servidor da Cakto bloqueou o acesso ao Token (Verifique os logs na Vercel)." }, { status: 500 });
+      console.error("ERRO HTML TOKEN CAKTO:", tokenText);
+      return NextResponse.json({ error: "Erro ao gerar token Cakto." }, { status: 500 });
     }
 
     if (!tokenResponse.ok || !tokenData.access_token) {
-      console.error("Erro Auth Cakto:", tokenData);
-      return NextResponse.json({ error: "Falha ao autenticar na Cakto. Verifique se as credenciais estão corretas." }, { status: 500 });
+      return NextResponse.json({ error: "Falha ao autenticar na Cakto." }, { status: 500 });
     }
 
     const accessToken = tokenData.access_token;
     const origin = request.headers.get("origin") || "https://sua-loja.com";
 
-    // 2. Gerar Link de Pagamento
+    // 2. Criar o Checkout através da rota de Produtos
     const caktoPayload = {
-      amount: Math.round(serverTotal * 100),
-      customer: {
-        name: customer.name.trim(),
-        email: customer.email.trim(),
-        document: cleanCpfCnpj,
-        phone: cleanPhone
-      },
-      items: validatedItems.map((item) => ({
-        title: item.product_name,
-        quantity: item.quantity,
-        unit_price: Math.round(item.unit_price * 100),
-        tangible: true
-      })),
-      metadata: { order_id: createdOrder.id },
-      success_url: `${origin}/sucesso`,
-      cancel_url: `${origin}/carrinho`
+      name: `Pedido #${createdOrder.id.split('-')[0]} - Mega Imports`,
+      description: descricoesItens.join(", "),
+      price: Number(serverTotal.toFixed(2)),
+      type: "unique",
+      salesPage: origin
     };
 
-    const caktoResponse = await fetch("https://api.cakto.com.br/v1/checkouts", {
+    const caktoResponse = await fetch("https://api.cakto.com.br/public_api/products/", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0"
       },
       body: JSON.stringify(caktoPayload)
     });
@@ -158,26 +149,38 @@ export async function POST(request: NextRequest) {
     try {
       caktoData = JSON.parse(caktoText);
     } catch (e) {
-      console.error("ERRO HTML NO CHECKOUT DA CAKTO:", caktoText);
-      return NextResponse.json({ error: "A Cakto devolveu HTML em vez de criar o pagamento (Verifique os logs)." }, { status: 500 });
+      console.error("ERRO HTML PRODUTO CAKTO:", caktoText);
+      return NextResponse.json({ error: "A Cakto devolveu HTML em vez de criar o produto." }, { status: 500 });
     }
 
+    // Console.log para gravar na Vercel como a Cakto devolve o link, caso falhe no frontend
+    console.log("RESPOSTA DE SUCESSO DA CAKTO:", caktoData);
+
     if (!caktoResponse.ok) {
-      console.error("Erro Checkout Cakto:", caktoData);
       return NextResponse.json({ error: "Erro ao gerar link de pagamento na Cakto." }, { status: 400 });
     }
 
-    const initPoint = caktoData.checkout_url || caktoData.payment_url || caktoData.url;
+    // A Cakto deve devolver a URL do checkout dentro do objeto criado.
+    // Procuramos a URL em várias propriedades possíveis baseadas em APIs similares.
+    let initPoint = caktoData.checkout_url || caktoData.url || caktoData.payment_url;
+    
+    // Se estiver dentro de um objeto 'data' (comum em retornos de APIs REST)
+    if (!initPoint && caktoData.data) {
+      initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
+    }
 
     if (!initPoint) {
-      return NextResponse.json({ error: "Link não retornado pela Cakto." }, { status: 500 });
+      return NextResponse.json({ error: "O checkout foi criado, mas a Cakto não retornou a URL." }, { status: 500 });
     }
+
+    // Opcional: Adiciona os dados do cliente na URL para pré-preencher o ecrã da Cakto
+    const checkoutCompleto = `${initPoint}?name=${encodeURIComponent(customer.name.trim())}&email=${encodeURIComponent(customer.email.trim())}&document=${cleanCpfCnpj}&phone=${cleanPhone}`;
 
     await supabase.from("order_items").insert(
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
 
-    return NextResponse.json({ initPoint });
+    return NextResponse.json({ initPoint: checkoutCompleto });
     
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro interno no servidor.";
