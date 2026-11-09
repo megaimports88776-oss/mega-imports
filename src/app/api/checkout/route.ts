@@ -18,11 +18,10 @@ export async function POST(request: NextRequest) {
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const clientId = process.env.CAKTO_CLIENT_ID;
-    const clientSecret = process.env.CAKTO_CLIENT_SECRET;
+    const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
 
-    if (!supabaseUrl || !supabaseServiceKey || !clientId || !clientSecret) {
-      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou Cakto)." }, { status: 500 });
+    if (!supabaseUrl || !supabaseServiceKey || !mpToken) {
+      return NextResponse.json({ error: "Erro de configuração de chaves (Supabase ou Mercado Pago)." }, { status: 500 });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -41,7 +40,6 @@ export async function POST(request: NextRequest) {
 
     let serverTotal = 0;
     const validatedItems = [];
-    const descricoesItens = [];
 
     for (const cartItem of items) {
       const dbProduct = dbProducts.find((p) => p.id === cartItem.id);
@@ -61,8 +59,6 @@ export async function POST(request: NextRequest) {
         quantity: qty,
         subtotal,
       });
-      
-      descricoesItens.push(`${qty}x ${dbProduct.name}`);
     }
 
     const { data: createdOrder, error: orderError } = await supabase
@@ -87,90 +83,72 @@ export async function POST(request: NextRequest) {
     if (orderError || !createdOrder) {
       return NextResponse.json({ error: "Erro ao salvar pedido." }, { status: 500 });
     }
-    
-    // 1. Gerar Token na Cakto
-    const tokenResponse = await fetch("https://api.cakto.com.br/public_api/token/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
-      },
-      body: new URLSearchParams({
-        "client_id": clientId,
-        "client_secret": clientSecret
-      }).toString()
-    });
-
-    const tokenText = await tokenResponse.text();
-    let tokenData;
-    
-    try {
-      tokenData = JSON.parse(tokenText);
-    } catch (e) {
-      return NextResponse.json({ error: "Erro ao gerar token Cakto." }, { status: 500 });
-    }
-
-    if (!tokenResponse.ok || !tokenData.access_token) {
-      return NextResponse.json({ error: "Falha ao autenticar na Cakto." }, { status: 500 });
-    }
-
-    const accessToken = tokenData.access_token;
-    const origin = request.headers.get("origin") || "https://sua-loja.com";
-
-    // 2. Criar o Produto na Cakto já com status ativo e livre para compra
-    const caktoPayload = {
-      name: `Pedido #${createdOrder.id.split('-')[0]} - Mega Imports`,
-      description: descricoesItens.join(", "),
-      price: Number(serverTotal.toFixed(2)),
-      type: "unique",
-      status: "active",
-      salesPage: origin
-    };
-
-    const caktoResponse = await fetch("https://api.cakto.com.br/public_api/products/", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0"
-      },
-      body: JSON.stringify(caktoPayload)
-    });
-
-    const caktoText = await caktoResponse.text();
-    let caktoData;
-
-    try {
-      caktoData = JSON.parse(caktoText);
-    } catch (e) {
-      return NextResponse.json({ error: "A Cakto devolveu HTML em vez de criar o produto." }, { status: 500 });
-    }
-
-    if (!caktoResponse.ok) {
-      return NextResponse.json({ error: "Erro ao gerar link de pagamento na Cakto." }, { status: 400 });
-    }
-
-    let initPoint = caktoData.checkout_url || caktoData.url || caktoData.payment_url;
-    
-    if (!initPoint && caktoData.data) {
-      initPoint = caktoData.data.checkout_url || caktoData.data.url || caktoData.data.payment_url;
-    }
-
-    if (!initPoint && caktoData.offers && caktoData.offers.length > 0) {
-      const idDaOferta = caktoData.offers[0].id;
-      const checkoutId = caktoData.offers[0].checkout;
-      initPoint = `https://pay.cakto.com.br/${idDaOferta}_${checkoutId}`;
-    }
-
-    if (!initPoint) {
-      return NextResponse.json({ error: "O checkout foi criado, mas a URL não pôde ser montada." }, { status: 500 });
-    }
 
     await supabase.from("order_items").insert(
       validatedItems.map((item) => ({ ...item, order_id: createdOrder.id }))
     );
+
+    // ==========================================
+    // INTEGRAÇÃO MERCADO PAGO (Checkout Pro)
+    // ==========================================
+    
+    // Separa o nome para enviar corretamente ao Mercado Pago
+    const nomePartes = customer.name.trim().split(" ");
+    const primeiroNome = nomePartes[0];
+    const sobrenome = nomePartes.slice(1).join(" ") || "Cliente";
+
+    const mpPayload = {
+      items: validatedItems.map(item => ({
+        id: item.product_id,
+        title: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        currency_id: "BRL"
+      })),
+      payer: {
+        name: primeiroNome,
+        surname: sobrenome,
+        email: customer.email.trim(),
+        identification: {
+          type: cleanCpfCnpj.length > 11 ? "CNPJ" : "CPF",
+          number: cleanCpfCnpj
+        },
+        phone: {
+          area_code: cleanPhone.substring(0, 2),
+          number: cleanPhone.substring(2)
+        }
+      },
+      external_reference: createdOrder.id, // Liga o pagamento do MP ao ID do Supabase
+      back_urls: {
+        success: `${request.headers.get("origin") || "https://sua-loja.com"}/sucesso`,
+        failure: `${request.headers.get("origin") || "https://sua-loja.com"}/carrinho`,
+        pending: `${request.headers.get("origin") || "https://sua-loja.com"}/pendente`
+      },
+      auto_return: "approved"
+    };
+
+    const mpResponse = await fetch("https://api.mercadopago.com/checkout/preferences", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${mpToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(mpPayload)
+    });
+
+    const mpData = await mpResponse.json();
+
+    if (!mpResponse.ok) {
+      console.error("Erro do Mercado Pago:", mpData);
+      return NextResponse.json({ error: "Erro ao gerar pagamento no Mercado Pago." }, { status: 400 });
+    }
+
+    // O Mercado Pago devolve a URL pronta em 'init_point'
+    const initPoint = mpData.init_point;
+
+    if (!initPoint) {
+      return NextResponse.json({ error: "URL de pagamento não retornada pelo Mercado Pago." }, { status: 500 });
+    }
 
     return NextResponse.json({ initPoint });
     
